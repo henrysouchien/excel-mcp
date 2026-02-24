@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Excel MCP</title>
+  <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <link href="taskpane.css" rel="stylesheet" type="text/css" />
+</head>
+<body>
+  <section id="sideload-msg" class="sideload">
+    <h2>Please sideload the add-in.</h2>
+  </section>
+
+  <main id="app" class="app" style="display: none;">
+    <h1>Excel MCP Bridge</h1>
+    <p>Waiting for tool requests from MCP relay.</p>
+    <div class="status-row">
+      <span id="status-dot" class="status-dot disconnected"></span>
+      <span id="status-text">Disconnected</span>
+    </div>
+    <p class="hint">Set <code>EXCEL_MCP_SECRET</code> in build env or <code>sessionStorage.excel_mcp_secret</code>.</p>
+  </main>
+</body>
+</html>

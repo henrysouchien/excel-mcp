@@ -1,0 +1,55 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", Tahoma, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #f7f8fb;
+  color: #1f2937;
+}
+
+.sideload,
+.app {
+  padding: 16px;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+p {
+  margin: 0 0 12px;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-dot.connected {
+  background: #16a34a;
+}
+
+.status-dot.disconnected {
+  background: #ef4444;
+}
+
+.status-dot.working {
+  background: #f59e0b;
+}
+
+.hint {
+  font-size: 12px;
+  color: #4b5563;
+}

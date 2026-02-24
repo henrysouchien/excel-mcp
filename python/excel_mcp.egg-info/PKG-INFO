@@ -1,0 +1,26 @@
+Metadata-Version: 2.4
+Name: excel-mcp
+Version: 0.1.0
+Summary: MCP server, relay backend, and tool registry for Excel add-ins
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi
+Requires-Dist: uvicorn
+Requires-Dist: httpx~=0.27.0
+Requires-Dist: fastmcp
+Requires-Dist: mcp
+Requires-Dist: python-dotenv
+
+# excel-mcp (Python)
+
+Shared Python components for Excel MCP integrations:
+- `excel_mcp.relay`: FastAPI relay app (`uvicorn excel_mcp.relay:app`)
+- `excel_mcp.tool_registry`: built-in Excel tools + `register_tools()`
+- `excel_mcp.mcp_server`: MCP stdio server implementation
+
+## Install
+
+```bash
+pip install -e ./packages/excel-mcp/python
+```
