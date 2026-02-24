@@ -1,12 +1,17 @@
-# excel-mcp (Python)
+# excel-mcp
 
-Shared Python components for Excel MCP integrations:
-- `excel_mcp.relay`: FastAPI relay app (`uvicorn excel_mcp.relay:app`)
-- `excel_mcp.tool_registry`: built-in Excel tools + `register_tools()`
-- `excel_mcp.mcp_server`: MCP stdio server implementation
+Python package for connecting Excel to AI via MCP.
+
+See the [main README](../README.md) for full documentation.
 
 ## Install
 
 ```bash
-pip install -e ./packages/excel-mcp/python
+pip install -e .
 ```
+
+## Components
+
+- `excel_mcp.mcp_server` — MCP stdio server (`python -m excel_mcp`)
+- `excel_mcp.relay` — FastAPI relay backend (`uvicorn excel_mcp.relay:app`)
+- `excel_mcp.tool_registry` — 18 built-in Excel tools + `register_tools()` extensibility
