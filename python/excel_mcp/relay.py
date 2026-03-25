@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import secrets
 import time
@@ -295,9 +296,23 @@ class RelayState:
     self.tool_names = set(tool_names)
 
 
+def _sanitize_for_json(obj: Any) -> Any:
+  """Recursively replace NaN/Infinity float values with None."""
+  if isinstance(obj, float) and not math.isfinite(obj):
+    return None
+  if isinstance(obj, dict):
+    return {key: _sanitize_for_json(value) for key, value in obj.items()}
+  if isinstance(obj, (list, tuple)):
+    return [_sanitize_for_json(value) for value in obj]
+  if isinstance(obj, (set, frozenset)):
+    return [_sanitize_for_json(value) for value in obj]
+  return obj
+
+
 def json_dumps(payload: Dict[str, Any]) -> str:
   """Serialize JSON using FastAPI's response encoder for SSE safety."""
-  return JSONResponse(content=payload).body.decode("utf-8")
+  sanitized = _sanitize_for_json(payload)
+  return JSONResponse(content=sanitized).body.decode("utf-8")
 
 
 def _is_valid_mcp_secret(candidate: str, secret: str) -> bool:
@@ -312,7 +327,7 @@ def create_relay_app(
   tool_names: Optional[Set[str]] = None,
 ) -> FastAPI:
   if cors_origins is None:
-    cors_raw = os.getenv("CHAT_CORS_ORIGINS", "https://localhost:3000,http://localhost:3000")
+    cors_raw = os.getenv("CHAT_CORS_ORIGINS", "https://localhost:3002,http://localhost:3002")
     cors_origins = [origin.strip() for origin in cors_raw.split(",") if origin.strip()]
 
   if tool_names is None:

@@ -1,6 +1,5 @@
-from .mcp_server import _kill_previous_instance, mcp
+from .cli import main
 
 
 if __name__ == "__main__":
-  _kill_previous_instance()
-  mcp.run()
+  raise SystemExit(main(default_subcommand="mcp"))

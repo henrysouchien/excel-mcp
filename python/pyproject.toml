@@ -18,6 +18,9 @@ dependencies = [
   "python-dotenv",
 ]
 
+[project.scripts]
+excel-mcp = "excel_mcp.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["excel_mcp*"]

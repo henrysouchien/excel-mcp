@@ -7,16 +7,20 @@ const devCerts = require("office-addin-dev-certs");
 const CopyWebpackPlugin = require("copy-webpack-plugin");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
 
-// Load api/.env so EXCEL_MCP_SECRET (and other vars) are available at build time
-const envPath = path.resolve(__dirname, "api", ".env");
-if (fs.existsSync(envPath)) {
+// Load package-local .env in standalone mode, or fall back to the monorepo api/.env.
+const envPaths = [
+  path.resolve(__dirname, "..", ".env"),
+  path.resolve(__dirname, "..", "..", "..", "api", ".env"),
+];
+const envPath = envPaths.find((candidate) => fs.existsSync(candidate));
+if (envPath) {
   for (const line of fs.readFileSync(envPath, "utf8").split("\n")) {
     const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.+)\s*$/);
     if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
   }
 }
 
-const urlDev = "https://localhost:3000/";
+const urlDev = "https://localhost:3002/";
 const urlProd = "https://www.contoso.com/"; // CHANGE THIS TO YOUR PRODUCTION DEPLOYMENT LOCATION
 
 async function getHttpsOptions() {
@@ -107,7 +111,7 @@ module.exports = async (env, options) => {
         type: "https",
         options: env.WEBPACK_BUILD || options.https !== undefined ? options.https : await getHttpsOptions(),
       },
-      port: process.env.npm_package_config_dev_server_port || 3000,
+      port: process.env.npm_package_config_dev_server_port || 3002,
     },
   };
 
