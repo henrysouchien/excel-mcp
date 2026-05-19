@@ -72,6 +72,7 @@ BACKEND_URL = os.getenv("EXCEL_MCP_BACKEND_URL", "https://localhost:8000/api/mcp
 BACKEND_BASE_URL = os.getenv("EXCEL_MCP_BACKEND_BASE_URL", "").strip().rstrip("/")
 MCP_SECRET = os.getenv("EXCEL_MCP_SECRET", "").strip()
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("EXCEL_MCP_TOOL_TIMEOUT", "60"))
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 
 mcp = FastMCP(
   MCP_NAME,
@@ -97,6 +98,14 @@ def _pid_file_path() -> Path:
   return Path.cwd() / ".excel_mcp_server.pid"
 
 
+def _singleton_pid_kill_enabled() -> bool:
+  return os.getenv("EXCEL_MCP_SINGLETON", "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _write_current_pid() -> None:
+  _pid_file_path().write_text(str(os.getpid()))
+
+
 def _kill_previous_instance() -> None:
   """Kill any previous MCP server instance using a PID file."""
   pid_file = _pid_file_path()
@@ -108,7 +117,20 @@ def _kill_previous_instance() -> None:
         print(f"Killed previous MCP server (PID {old_pid})", file=sys.stderr)
     except (ValueError, ProcessLookupError, PermissionError):
       pass
-  pid_file.write_text(str(os.getpid()))
+  _write_current_pid()
+
+
+def _prepare_stdio_instance() -> None:
+  """Prepare process state for a stdio MCP server.
+
+  Multiple Claude sessions may legitimately spawn independent stdio proxy
+  processes. Keep singleton termination opt-in so a new session does not
+  disconnect an existing session.
+  """
+  if _singleton_pid_kill_enabled():
+    _kill_previous_instance()
+    return
+  _write_current_pid()
 
 
 def _call_backend(
@@ -272,6 +294,7 @@ __all__ = [
   "mcp",
   "RegistryTool",
   "_call_backend",
+  "_prepare_stdio_instance",
   "_kill_previous_instance",
   "channel_status",
 ]

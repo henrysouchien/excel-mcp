@@ -20,6 +20,7 @@ interface McpToolRequestEvent {
   type: "mcp_tool_request";
   request_id: string;
   nonce: string;
+  delivery_id: string;
   tool_name: string;
   tool_input: Record<string, any>;
   replay?: boolean;
@@ -36,6 +37,7 @@ let mcpStopped = false;
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Excel) {
+    Office.addin.setStartupBehavior(Office.StartupBehavior.load).catch(() => {});
     initialize();
   }
 });
@@ -65,6 +67,30 @@ function getMcpSecret(): string {
   return (envSecret || sessionSecret).trim();
 }
 
+function getUserId(): string {
+  const envUserId = process.env.EXCEL_MCP_USER_ID || "";
+  const sessionUserId = sessionStorage.getItem("excel_mcp_user_id") || "";
+  return (envUserId || sessionUserId).trim();
+}
+
+function getSessionToken(): string {
+  let token = sessionStorage.getItem("excel_mcp_session");
+  if (!token) {
+    token = crypto.randomUUID();
+    sessionStorage.setItem("excel_mcp_session", token);
+  }
+  return token;
+}
+
+async function getWorkbookName(): Promise<string> {
+  return Excel.run(async (ctx) => {
+    const workbook = ctx.workbook;
+    workbook.load("name");
+    await ctx.sync();
+    return workbook.name;
+  });
+}
+
 async function connectLoop(): Promise<void> {
   while (!mcpStopped) {
     const secret = getMcpSecret();
@@ -73,9 +99,15 @@ async function connectLoop(): Promise<void> {
       await sleep(MCP_RECONNECT_DELAY_MS);
       continue;
     }
+    const userId = getUserId();
+    if (!userId) {
+      setStatus("Waiting for EXCEL_MCP_USER_ID", "disconnected");
+      await sleep(MCP_RECONNECT_DELAY_MS);
+      continue;
+    }
 
     try {
-      await connectOnce(secret);
+      await connectOnce(secret, userId);
     } catch (error) {
       console.error("[MCP] stream error", error);
       setStatus("Disconnected", "disconnected");
@@ -85,9 +117,16 @@ async function connectLoop(): Promise<void> {
   }
 }
 
-async function connectOnce(secret: string): Promise<void> {
+async function connectOnce(secret: string, userId: string): Promise<void> {
   setStatus("Connecting...", "working");
-  const response = await fetch(`${API_BASE}/api/mcp/events?secret=${encodeURIComponent(secret)}`, {
+  const workbookName = await getWorkbookName();
+  const sessionToken = getSessionToken();
+  const url =
+    `${API_BASE}/api/mcp/events?secret=${encodeURIComponent(secret)}` +
+    `&workbook=${encodeURIComponent(workbookName)}` +
+    `&session=${encodeURIComponent(sessionToken)}` +
+    `&user_id=${encodeURIComponent(userId)}`;
+  const response = await fetch(url, {
     method: "GET",
     headers: { Accept: "text/event-stream" },
   });
@@ -140,8 +179,17 @@ async function connectOnce(secret: string): Promise<void> {
 async function handleToolRequest(event: McpToolRequestEvent): Promise<void> {
   const secret = getMcpSecret();
   if (!secret) return;
+  const deliveryId = event.delivery_id;
 
-  await postToolResult({ request_id: event.request_id, nonce: event.nonce, ack: true }, secret);
+  await postToolResult(
+    {
+      request_id: event.request_id,
+      nonce: event.nonce,
+      delivery_id: deliveryId,
+      ack: true,
+    },
+    secret
+  );
 
   const outcome = await executeOfficeServiceTool(event.tool_name, event.tool_input);
 
@@ -149,6 +197,7 @@ async function handleToolRequest(event: McpToolRequestEvent): Promise<void> {
     {
       request_id: event.request_id,
       nonce: event.nonce,
+      delivery_id: deliveryId,
       result: outcome.result,
       error: outcome.error,
     },
@@ -216,6 +265,12 @@ async function executeOfficeServiceTool(toolName: string, toolInput: Record<stri
         break;
       case "delete_column":
         result = await OfficeService.deleteColumn(toolInput.column, toolInput.count, toolInput.sheet_name, toolInput.force);
+        break;
+      case "restore_deleted_sheet":
+        result = await OfficeService.restoreDeletedSheet(toolInput.restore_token);
+        break;
+      case "restore_deleted_column":
+        result = await OfficeService.restoreDeletedColumn(toolInput.restore_token);
         break;
       case "create_table":
         result = await OfficeService.createTable(toolInput.range, toolInput.has_headers, toolInput.table_name);

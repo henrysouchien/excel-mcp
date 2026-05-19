@@ -17,10 +17,12 @@ AI Client ←→ MCP Server ←→ Relay Backend ←→ Excel Add-in ←→ Work
 
 ## Built-in tools
 
-18 tools for working with Excel:
+20 tools for working with Excel:
 
 | Tool | Description |
 |------|-------------|
+| `list_workbooks` | List workbooks currently connected through the taskpane |
+| `switch_active_workbook` | Set the default workbook target for later tool calls |
 | `read_cells` | Read values and formulas from a range |
 | `write_cells` | Write values to a range |
 | `read_range_csv` | Read a range as CSV text |
@@ -52,6 +54,7 @@ pip install -e ./python
 
 ```bash
 export EXCEL_MCP_SECRET="your-shared-secret"
+export EXCEL_MCP_USER_ID="your-user-id"
 export EXCEL_MCP_BACKEND_URL="https://localhost:8000/api/mcp/execute"
 ```
 
@@ -76,6 +79,12 @@ npm run dev-server
 ```
 
 Then sideload `manifest.xml` in Excel ([instructions](https://learn.microsoft.com/en-us/office/dev/add-ins/testing/sideload-office-add-ins-for-testing)).
+
+Taskpane startup behavior:
+
+- First use in a workbook still requires a manual open through Insert > My Add-ins.
+- After that first manual open, the taskpane is configured to auto-load when the same workbook is reopened.
+- New workbooks need that initial manual open once before auto-load applies to them too.
 
 ### 6. Connect your AI client
 

@@ -219,9 +219,9 @@ def command_start(_: argparse.Namespace) -> int:
 
 
 def command_mcp(_: argparse.Namespace) -> int:
-  from .mcp_server import _kill_previous_instance, mcp
+  from .mcp_server import _prepare_stdio_instance, mcp
 
-  _kill_previous_instance()
+  _prepare_stdio_instance()
   mcp.run()
   return 0
 

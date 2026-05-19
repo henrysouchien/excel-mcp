@@ -20,6 +20,16 @@ if (envPath) {
   }
 }
 
+function requireEnv(name) {
+  const value = process.env[name];
+  const trimmed = String(value || "").trim();
+  const quotedEmpty = trimmed === "\"\"" || trimmed === "''";
+  if (!trimmed || quotedEmpty) {
+    throw new Error(`webpack: required env var ${name} is empty — set in api/.env or shell`);
+  }
+  return value;
+}
+
 const urlDev = "https://localhost:3002/";
 const urlProd = "https://www.contoso.com/"; // CHANGE THIS TO YOUR PRODUCTION DEPLOYMENT LOCATION
 
@@ -30,12 +40,13 @@ async function getHttpsOptions() {
 
 module.exports = async (env, options) => {
   const dev = options.mode === "development";
+  const excelMcpSecret = requireEnv("EXCEL_MCP_SECRET");
+  const excelMcpUserId = String(process.env.EXCEL_MCP_USER_ID || "").trim();
   const config = {
     devtool: "source-map",
     entry: {
       polyfill: ["core-js/stable", "regenerator-runtime/runtime"],
       taskpane: ["./src/taskpane/taskpane.ts", "./src/taskpane/taskpane.html"],
-      commands: "./src/commands/commands.ts",
     },
     output: {
       clean: true,
@@ -71,7 +82,8 @@ module.exports = async (env, options) => {
         "process.env.API_BASE": JSON.stringify(
           dev ? "https://localhost:8000" : (process.env.API_BASE || "https://localhost:8000")
         ),
-        "process.env.EXCEL_MCP_SECRET": JSON.stringify(process.env.EXCEL_MCP_SECRET || ""),
+        "process.env.EXCEL_MCP_SECRET": JSON.stringify(excelMcpSecret),
+        "process.env.EXCEL_MCP_USER_ID": JSON.stringify(excelMcpUserId),
       }),
       new HtmlWebpackPlugin({
         filename: "taskpane.html",
@@ -96,11 +108,6 @@ module.exports = async (env, options) => {
             },
           },
         ],
-      }),
-      new HtmlWebpackPlugin({
-        filename: "commands.html",
-        template: "./src/commands/commands.html",
-        chunks: ["polyfill", "commands"],
       }),
     ],
     devServer: {

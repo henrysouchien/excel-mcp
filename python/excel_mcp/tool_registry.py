@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Dict, List, Set
 
 
@@ -131,6 +132,18 @@ EXCEL_TOOL_SPECS: List[Dict[str, Any]] = [{'name': 'read_cells',
                                             'default': False,
                                             'description': 'Must be true to confirm irreversible deletion.'}},
                    'required': ['column']}},
+ {'name': 'restore_deleted_sheet',
+  'description': 'Restore a worksheet deleted by delete_sheet using the restore_token returned by that delete.',
+  'input_schema': {'type': 'object',
+                   'properties': {'restore_token': {'type': 'string',
+                                                    'description': 'restore_token returned by delete_sheet.'}},
+                   'required': ['restore_token']}},
+ {'name': 'restore_deleted_column',
+  'description': 'Restore columns deleted by delete_column using the restore_token returned by that delete.',
+  'input_schema': {'type': 'object',
+                   'properties': {'restore_token': {'type': 'string',
+                                                    'description': 'restore_token returned by delete_column.'}},
+                   'required': ['restore_token']}},
  {'name': 'create_table',
   'description': 'Create an Excel table from a range on the active worksheet. Active-sheet tool: switch sheets first '
                  'if needed. Tables add filter controls and structured references. Set has_headers=true when first row '
@@ -205,6 +218,37 @@ EXCEL_TOOL_SPECS: List[Dict[str, Any]] = [{'name': 'read_cells',
                    'required': []}}]
 
 _TOOL_NAMES: Set[str] = {spec["name"] for spec in EXCEL_TOOL_SPECS}
+_REGISTERED_TOOL_SPECS: List[Dict[str, Any]] = []
+_RELAY_LOCAL_TOOL_SPECS: List[Dict[str, Any]] = [
+  {
+    "name": "list_workbooks",
+    "description": "List Excel workbooks currently connected via the excel-mcp taskpane.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+    },
+  },
+  {
+    "name": "switch_active_workbook",
+    "description": "Set the active workbook target for subsequent tool calls. Use session token from list_workbooks.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string",
+          "description": "Session token from list_workbooks",
+        },
+      },
+      "required": ["session"],
+    },
+  },
+]
+_WORKBOOK_BOUND_TOOL_NAMES: Set[str] = {spec["name"] for spec in EXCEL_TOOL_SPECS}
+_WORKBOOK_OVERRIDE_SCHEMA: Dict[str, Any] = {
+  "type": "string",
+  "description": "Advanced: session token from list_workbooks; omit to use the active workbook.",
+}
+_TOOL_NAMES.update(spec["name"] for spec in _RELAY_LOCAL_TOOL_SPECS)
 
 
 def register_tools(*specs: Dict[str, Any]) -> None:
@@ -224,12 +268,22 @@ def register_tools(*specs: Dict[str, Any]) -> None:
       raise ValueError(f"Duplicate tool name: {name}")
 
     _TOOL_NAMES.add(name)
-    EXCEL_TOOL_SPECS.append(spec)
+    _REGISTERED_TOOL_SPECS.append(spec)
 
 
 def get_tool_specs() -> List[Dict[str, Any]]:
   """Return all tool specs (built-in + registered)."""
-  return list(EXCEL_TOOL_SPECS)
+  specs: List[Dict[str, Any]] = []
+
+  for spec in EXCEL_TOOL_SPECS + _RELAY_LOCAL_TOOL_SPECS + _REGISTERED_TOOL_SPECS:
+    copied = deepcopy(spec)
+    if spec["name"] in _WORKBOOK_BOUND_TOOL_NAMES:
+      input_schema = copied.setdefault("input_schema", {})
+      properties = input_schema.setdefault("properties", {})
+      properties.setdefault("_workbook", deepcopy(_WORKBOOK_OVERRIDE_SCHEMA))
+    specs.append(copied)
+
+  return specs
 
 
 def get_tool_names() -> Set[str]:

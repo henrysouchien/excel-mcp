@@ -21,6 +21,7 @@ pip install -e ./python
 
 ```bash
 export EXCEL_MCP_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+export EXCEL_MCP_USER_ID="your-user-id"
 echo "EXCEL_MCP_SECRET=$EXCEL_MCP_SECRET"
 ```
 
@@ -86,5 +87,6 @@ You should see the MCP server relay the request through to Excel and return the 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `EXCEL_MCP_SECRET` | Yes | — | Shared secret for relay authentication |
+| `EXCEL_MCP_USER_ID` | Yes for add-in | — | Explicit user id attached to the workbook SSE session |
 | `EXCEL_MCP_BACKEND_URL` | No | `https://localhost:8000/api/mcp/execute` | Relay execute endpoint |
 | `EXCEL_MCP_BACKEND_BASE_URL` | No | Derived from `BACKEND_URL` | Base URL for relay (used for events/status) |
