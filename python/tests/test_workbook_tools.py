@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 import pytest
 
+from excel_mcp import mcp_server
 from excel_mcp.relay import McpRelay
 from excel_mcp.tool_registry import get_tool_specs
 
@@ -89,6 +90,73 @@ def test_workbook_tool_schemas_only_inject_workbook_override_for_workbook_bound_
   assert "_workbook" in specs["read_cells"]["input_schema"]["properties"]
   assert "_workbook" not in specs["list_workbooks"]["input_schema"]["properties"]
   assert "_workbook" not in specs["switch_active_workbook"]["input_schema"]["properties"]
+
+
+def test_mutating_workbook_tools_advertise_restore_paths() -> None:
+  specs = {spec["name"]: spec for spec in get_tool_specs()}
+
+  for tool_name, undo_tool in (
+    ("write_cells", "restore_written_cells"),
+    ("rename_sheet", "restore_renamed_sheet"),
+    ("delete_sheet", "restore_deleted_sheet"),
+    ("delete_row", "restore_deleted_row"),
+    ("delete_column", "restore_deleted_column"),
+  ):
+    description = specs[tool_name]["description"]
+    assert "restore_token" in description
+    assert undo_tool in description
+    assert undo_tool in specs
+    restore_schema = specs[undo_tool]["input_schema"]
+    assert restore_schema["required"] == ["restore_token"]
+
+
+def test_workbook_tool_descriptions_include_agent_contracts() -> None:
+  specs = {spec["name"]: spec for spec in get_tool_specs()}
+
+  for spec in specs.values():
+    description = spec["description"]
+    assert len(description.split()) >= 50
+    assert "Result contract:" in description
+    assert "structured status=error envelope" in description
+
+  assert "`list_sheets`" in specs["read_cells"]["description"]
+  assert "`list_workbooks`" in specs["switch_active_workbook"]["description"]
+  assert "restore-token recovery path" in specs["delete_row"]["description"]
+
+
+def test_registry_tool_errors_return_structured_recovery_envelope(monkeypatch) -> None:
+  def fail_backend(tool_name: str, tool_input: Dict[str, Any], timeout_seconds: int) -> Any:
+    raise RuntimeError("unknown_session")
+
+  monkeypatch.setattr(mcp_server, "_call_backend", fail_backend)
+  tool = mcp_server.RegistryTool(
+    tool_name="read_cells",
+    name="read_cells",
+    description="Read cells.",
+    parameters={"type": "object", "properties": {}},
+  )
+
+  result = run_async(tool.run({"range": "A1"}))
+
+  assert result.structured_content["status"] == "error"
+  assert result.structured_content["code"] == "unknown_workbook_session"
+  assert result.structured_content["recoverable"] is True
+  assert result.structured_content["suggested_tool_calls"] == [
+    {"tool_name": "list_workbooks", "arguments": {}}
+  ]
+
+
+def test_channel_status_errors_return_structured_recovery_envelope(monkeypatch) -> None:
+  async def fail_channel_status() -> Dict[str, Any]:
+    raise RuntimeError("No active Excel taskpane connection")
+
+  monkeypatch.setattr(mcp_server, "_channel_status", fail_channel_status)
+
+  result = run_async(mcp_server.channel_status())
+
+  assert result["status"] == "error"
+  assert result["code"] == "no_active_excel_taskpane"
+  assert result["suggested_tool_calls"] == [{"tool_name": "list_workbooks", "arguments": {}}]
 
 
 def test_list_workbooks_reports_zero_one_and_many_connections() -> None:

@@ -447,11 +447,20 @@ export class OfficeService {
     rangeAddress: string,
     values: string | number | null | any[][],
     numberFormat?: string
-  ): Promise<{ address: string; rows: number; cols: number }> {
+  ): Promise<{
+    address: string;
+    rows: number;
+    cols: number;
+    restore_token: string;
+    undo_tool: string;
+  }> {
     console.log("[OfficeService] writeCells:", rangeAddress, values);
     return Excel.run(async (ctx) => {
       try {
-        const range = ctx.workbook.worksheets.getActiveWorksheet().getRange(rangeAddress);
+        const worksheets = ctx.workbook.worksheets;
+        const sheet = worksheets.getActiveWorksheet();
+        const range = sheet.getRange(rangeAddress);
+        sheet.load("name");
         range.load(["address", "rowCount", "columnCount"]);
         await ctx.sync();
 
@@ -459,6 +468,12 @@ export class OfficeService {
         if ((range.rowCount > 1 || range.columnCount > 1) && isScalar) {
           throw new Error("Scalar values require a single-cell range.");
         }
+
+        const backupSheetName = OfficeService.createUndoSheetName("write");
+        const backupSheet = worksheets.add(backupSheetName);
+        const backupRange = backupSheet.getRangeByIndexes(0, 0, range.rowCount, range.columnCount);
+        backupRange.copyFrom(range, Excel.RangeCopyType.all);
+        backupSheet.visibility = Excel.SheetVisibility.veryHidden;
 
         if (Array.isArray(values)) {
           range.values = values as any[][];
@@ -472,11 +487,68 @@ export class OfficeService {
 
         await ctx.sync();
         console.log("[OfficeService] writeCells complete:", range.address);
-        return { address: range.address, rows: range.rowCount, cols: range.columnCount };
+        return {
+          address: range.address,
+          rows: range.rowCount,
+          cols: range.columnCount,
+          restore_token: OfficeService.encodeRestoreToken("write_cells", {
+            sheetName: sheet.name,
+            backupSheetName,
+            rangeAddress: range.address.split("!").pop() || rangeAddress,
+            rowCount: range.rowCount,
+            columnCount: range.columnCount,
+          }),
+          undo_tool: "restore_written_cells",
+        };
       } catch (error) {
         console.error("[OfficeService] writeCells error:", error);
         throw error;
       }
+    });
+  }
+
+  static async restoreWrittenCells(
+    restoreToken: string
+  ): Promise<{
+    restored: boolean;
+    sheetName: string;
+    restoredRange: string;
+    backupSheetName: string;
+    summary: string;
+  }> {
+    const payload = OfficeService.decodeRestoreToken(restoreToken, "write_cells");
+    const sheetName = String(payload.sheetName || "").trim();
+    const backupSheetName = String(payload.backupSheetName || "").trim();
+    const rangeAddress = String(payload.rangeAddress || "").trim();
+    const rowCount = Math.trunc(Number(payload.rowCount));
+    const columnCount = Math.trunc(Number(payload.columnCount));
+    if (!sheetName || !backupSheetName || !rangeAddress || !Number.isFinite(rowCount) || rowCount < 1 || !Number.isFinite(columnCount) || columnCount < 1) {
+      throw new Error("restore_token missing write snapshot");
+    }
+
+    return Excel.run(async (ctx) => {
+      const sheet = ctx.workbook.worksheets.getItem(sheetName);
+      const backup = ctx.workbook.worksheets.getItemOrNullObject(backupSheetName);
+      const targetRange = sheet.getRange(rangeAddress);
+      backup.load(["name", "isNullObject"]);
+      await ctx.sync();
+
+      if (backup.isNullObject) {
+        throw new Error(`Restore backup sheet not found: ${backupSheetName}`);
+      }
+
+      const backupRange = backup.getRangeByIndexes(0, 0, rowCount, columnCount);
+      targetRange.copyFrom(backupRange, Excel.RangeCopyType.all);
+      backup.delete();
+      await ctx.sync();
+
+      return {
+        restored: true,
+        sheetName,
+        restoredRange: rangeAddress,
+        backupSheetName,
+        summary: `Restored previous cell contents for ${rangeAddress} on '${sheetName}'.`,
+      };
     });
   }
 
@@ -602,6 +674,8 @@ export class OfficeService {
     sheetName: string;
     activeSheet: string;
     renamed: boolean;
+    restore_token?: string;
+    undo_tool?: string;
   }> {
     const normalizedNewName = String(newName || "").trim();
     if (!normalizedNewName) {
@@ -653,6 +727,60 @@ export class OfficeService {
         sheetName: normalizedNewName,
         activeSheet: currentActive.name,
         renamed: true,
+        restore_token: OfficeService.encodeRestoreToken("rename_sheet", {
+          previousSheet,
+          sheetName: normalizedNewName,
+        }),
+        undo_tool: "restore_renamed_sheet",
+      };
+    });
+  }
+
+  static async restoreRenamedSheet(
+    restoreToken: string
+  ): Promise<{
+    restored: boolean;
+    previousSheet: string;
+    sheetName: string;
+    activeSheet: string;
+    summary: string;
+  }> {
+    const payload = OfficeService.decodeRestoreToken(restoreToken, "rename_sheet");
+    const previousSheet = String(payload.previousSheet || "").trim();
+    const sheetName = String(payload.sheetName || "").trim();
+    if (!previousSheet || !sheetName) {
+      throw new Error("restore_token missing rename snapshot");
+    }
+
+    return Excel.run(async (ctx) => {
+      const workbook = ctx.workbook;
+      const renamedSheet = workbook.worksheets.getItemOrNullObject(sheetName);
+      const conflictingSheet = workbook.worksheets.getItemOrNullObject(previousSheet);
+      renamedSheet.load(["name", "isNullObject"]);
+      conflictingSheet.load(["name", "isNullObject"]);
+      await ctx.sync();
+
+      if (renamedSheet.isNullObject) {
+        throw new Error(`Sheet not found: ${sheetName}`);
+      }
+      if (!conflictingSheet.isNullObject && conflictingSheet.name !== sheetName) {
+        throw new Error(`Cannot restore '${previousSheet}' because a sheet with that name already exists`);
+      }
+
+      renamedSheet.name = previousSheet;
+      renamedSheet.activate();
+      await ctx.sync();
+
+      const activeSheet = workbook.worksheets.getActiveWorksheet();
+      activeSheet.load("name");
+      await ctx.sync();
+
+      return {
+        restored: true,
+        previousSheet,
+        sheetName,
+        activeSheet: activeSheet.name,
+        summary: `Restored sheet name '${sheetName}' to '${previousSheet}'.`,
       };
     });
   }
@@ -789,6 +917,8 @@ export class OfficeService {
     row: number;
     count: number;
     summary: string;
+    restore_token?: string;
+    undo_tool?: string;
   }> {
     const startRow = Math.trunc(Number(row));
     const deleteCount = Math.trunc(Number(count));
@@ -813,13 +943,26 @@ export class OfficeService {
     }
 
     return Excel.run(async (ctx) => {
+      const worksheets = ctx.workbook.worksheets;
       const sheet = sheetName
         ? ctx.workbook.worksheets.getItem(sheetName)
         : ctx.workbook.worksheets.getActiveWorksheet();
       const rowRange = sheet.getRange(rowAddress);
+      const usedRange = sheet.getUsedRangeOrNullObject();
 
       sheet.load("name");
+      usedRange.load(["isNullObject", "columnCount", "columnIndex"]);
       rowRange.load("address");
+      await ctx.sync();
+
+      const startColIndex = usedRange.isNullObject ? 0 : Math.max(0, usedRange.columnIndex);
+      const columnCount = usedRange.isNullObject ? 1 : Math.max(1, usedRange.columnCount);
+      const backupSheetName = OfficeService.createUndoSheetName("row");
+      const backupSheet = worksheets.add(backupSheetName);
+      const sourceRange = sheet.getRangeByIndexes(startRow - 1, startColIndex, deleteCount, columnCount);
+      const backupRange = backupSheet.getRangeByIndexes(0, 0, deleteCount, columnCount);
+      backupRange.copyFrom(sourceRange, Excel.RangeCopyType.all);
+      backupSheet.visibility = Excel.SheetVisibility.veryHidden;
       rowRange.delete(Excel.DeleteShiftDirection.up);
       await ctx.sync();
 
@@ -829,7 +972,66 @@ export class OfficeService {
         deletedRange: rowRange.address,
         row: startRow,
         count: deleteCount,
+        restore_token: OfficeService.encodeRestoreToken("delete_row", {
+          sheetName: sheet.name,
+          backupSheetName,
+          row: startRow,
+          count: deleteCount,
+          startColIndex,
+          columnCount,
+          rowAddress,
+        }),
+        undo_tool: "restore_deleted_row",
         summary: `Deleted row(s) ${rowAddress} on '${sheet.name}'.`,
+      };
+    });
+  }
+
+  static async restoreDeletedRow(
+    restoreToken: string
+  ): Promise<{
+    restored: boolean;
+    sheetName: string;
+    restoredRange: string;
+    backupSheetName: string;
+    summary: string;
+  }> {
+    const payload = OfficeService.decodeRestoreToken(restoreToken, "delete_row");
+    const sheetName = String(payload.sheetName || "").trim();
+    const backupSheetName = String(payload.backupSheetName || "").trim();
+    const row = Math.trunc(Number(payload.row));
+    const count = Math.trunc(Number(payload.count));
+    const startColIndex = Math.trunc(Number(payload.startColIndex));
+    const columnCount = Math.trunc(Number(payload.columnCount));
+    const rowAddress = String(payload.rowAddress || "");
+    if (!sheetName || !backupSheetName || !Number.isFinite(row) || row < 1 || !Number.isFinite(count) || count < 1 || !Number.isFinite(startColIndex) || startColIndex < 0 || !Number.isFinite(columnCount) || columnCount < 1 || !rowAddress) {
+      throw new Error("restore_token missing row snapshot");
+    }
+
+    return Excel.run(async (ctx) => {
+      const sheet = ctx.workbook.worksheets.getItem(sheetName);
+      const backup = ctx.workbook.worksheets.getItemOrNullObject(backupSheetName);
+      const insertRange = sheet.getRange(rowAddress);
+      backup.load(["name", "isNullObject"]);
+      await ctx.sync();
+
+      if (backup.isNullObject) {
+        throw new Error(`Restore backup sheet not found: ${backupSheetName}`);
+      }
+
+      insertRange.insert(Excel.InsertShiftDirection.down);
+      const targetRange = sheet.getRangeByIndexes(row - 1, startColIndex, count, columnCount);
+      const backupRange = backup.getRangeByIndexes(0, 0, count, columnCount);
+      targetRange.copyFrom(backupRange, Excel.RangeCopyType.all);
+      backup.delete();
+      await ctx.sync();
+
+      return {
+        restored: true,
+        sheetName,
+        restoredRange: rowAddress,
+        backupSheetName,
+        summary: `Restored row(s) ${rowAddress} on '${sheetName}'.`,
       };
     });
   }

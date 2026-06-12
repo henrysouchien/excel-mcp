@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 dependencies = [
   "fastapi",
   "uvicorn",
-  "httpx~=0.27.0",
+  "httpx>=0.27,<0.29",
   "fastmcp",
   "mcp",
   "python-dotenv",

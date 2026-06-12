@@ -30,7 +30,7 @@ function requireEnv(name) {
   return value;
 }
 
-const urlDev = "https://localhost:3002/";
+const urlDev = "https://localhost:3102/";
 const urlProd = "https://www.contoso.com/"; // CHANGE THIS TO YOUR PRODUCTION DEPLOYMENT LOCATION
 
 async function getHttpsOptions() {
@@ -40,8 +40,7 @@ async function getHttpsOptions() {
 
 module.exports = async (env, options) => {
   const dev = options.mode === "development";
-  const excelMcpSecret = requireEnv("EXCEL_MCP_SECRET");
-  const excelMcpUserId = String(process.env.EXCEL_MCP_USER_ID || "").trim();
+  const sessionApiKey = requireEnv("SESSION_API_KEY");
   const config = {
     devtool: "source-map",
     entry: {
@@ -82,8 +81,7 @@ module.exports = async (env, options) => {
         "process.env.API_BASE": JSON.stringify(
           dev ? "https://localhost:8000" : (process.env.API_BASE || "https://localhost:8000")
         ),
-        "process.env.EXCEL_MCP_SECRET": JSON.stringify(excelMcpSecret),
-        "process.env.EXCEL_MCP_USER_ID": JSON.stringify(excelMcpUserId),
+        "process.env.SESSION_API_KEY": JSON.stringify(sessionApiKey),
       }),
       new HtmlWebpackPlugin({
         filename: "taskpane.html",
@@ -118,7 +116,7 @@ module.exports = async (env, options) => {
         type: "https",
         options: env.WEBPACK_BUILD || options.https !== undefined ? options.https : await getHttpsOptions(),
       },
-      port: process.env.npm_package_config_dev_server_port || 3002,
+      port: process.env.npm_package_config_dev_server_port || 3102,
     },
   };
 

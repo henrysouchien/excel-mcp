@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Excel MCP</title>
+  <title>Excel MCP Bridge (Internal)</title>
   <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
   <link href="taskpane.css" rel="stylesheet" type="text/css" />
 </head>
@@ -14,13 +14,13 @@
   </section>
 
   <main id="app" class="app" style="display: none;">
-    <h1>Excel MCP Bridge</h1>
-    <p>Waiting for tool requests from MCP relay.</p>
+    <h1>Excel MCP Bridge (Internal)</h1>
+    <p>Internal relay harness. The user-facing taskpane is Hank AI from the root add-in.</p>
     <div class="status-row">
       <span id="status-dot" class="status-dot disconnected"></span>
       <span id="status-text">Disconnected</span>
     </div>
-    <p class="hint">Set <code>EXCEL_MCP_SECRET</code> and <code>EXCEL_MCP_USER_ID</code> in build env or session storage.</p>
+    <p class="hint">Set <code>SESSION_API_KEY</code> in build env or session storage.</p>
   </main>
 </body>
 </html>

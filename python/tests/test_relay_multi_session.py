@@ -108,7 +108,7 @@ def test_3_active_workbook_is_scoped_to_gateway_session() -> None:
 
     assert relay._active_workbook == {"session-a": "session-a", "session-b": "session-b"}
 
-    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1))
+    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1, user_id="alice"))
     event = await get_event(a.queue)
     assert event["delivery_id"] == a.client_id
     await assert_queue_empty(b.queue)
@@ -139,7 +139,7 @@ def test_5_stale_ack_is_rejected_after_replay() -> None:
   async def scenario() -> None:
     relay = make_relay()
     first = await register_client(relay, "session-a", "A.xlsx")
-    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1))
+    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1, user_id="alice"))
     original = await get_event(first.queue)
 
     second = await register_client(relay, "session-a", "A.xlsx")
@@ -161,7 +161,7 @@ def test_6_stale_complete_is_rejected_after_replay() -> None:
   async def scenario() -> None:
     relay = make_relay()
     first = await register_client(relay, "session-a", "A.xlsx")
-    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1))
+    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1, user_id="alice"))
     original = await get_event(first.queue)
 
     second = await register_client(relay, "session-a", "A.xlsx")
@@ -189,7 +189,7 @@ def test_6a_missing_delivery_id_is_rejected_for_modern_ack() -> None:
   async def scenario() -> None:
     relay = make_relay()
     client = await register_client(relay, "session-a", "A.xlsx")
-    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1))
+    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1, user_id="alice"))
     event = await get_event(client.queue)
 
     status = await relay.ack(event["request_id"], event["nonce"], None)
@@ -226,7 +226,7 @@ def test_6c_request_scoped_delivery_id_blocks_old_handler_after_reconnect() -> N
   async def scenario() -> None:
     relay = make_relay()
     first = await register_client(relay, "session-a", "A.xlsx")
-    execute_task = asyncio.create_task(relay.execute("write_cells", {"range": "A1", "values": 1}, timeout=1))
+    execute_task = asyncio.create_task(relay.execute("write_cells", {"range": "A1", "values": 1}, timeout=1, user_id="alice"))
     original = await get_event(first.queue)
 
     second = await register_client(relay, "session-a", "A.xlsx")
@@ -266,7 +266,7 @@ def test_6d_rapid_reconnects_only_replay_once() -> None:
   async def scenario() -> None:
     relay = make_relay()
     first = await register_client(relay, "session-a", "A.xlsx")
-    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1))
+    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1, user_id="alice"))
     initial = await get_event(first.queue)
 
     await relay.unregister_client("session-a", first.client_id)
@@ -318,7 +318,7 @@ def test_6f_modern_sessions_cannot_bypass_delivery_id_requirement() -> None:
   async def scenario() -> None:
     relay = make_relay()
     client = await register_client(relay, "session-a", "A.xlsx")
-    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1))
+    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1, user_id="alice"))
     event = await get_event(client.queue)
 
     status = await relay.ack(event["request_id"], event["nonce"], None)
@@ -337,7 +337,7 @@ def test_7_same_session_reconnect_within_grace_replays_after_delay() -> None:
   async def scenario() -> None:
     relay = make_relay()
     first = await register_client(relay, "session-a", "A.xlsx")
-    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1))
+    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=1, user_id="alice"))
     initial = await get_event(first.queue)
 
     await relay.unregister_client("session-a", first.client_id)
@@ -361,7 +361,7 @@ def test_8_same_session_reconnect_after_grace_does_not_replay_inflight() -> None
   async def scenario() -> None:
     relay = make_relay()
     first = await register_client(relay, "session-a", "A.xlsx")
-    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=0.2))
+    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=0.2, user_id="alice"))
     await get_event(first.queue)
 
     await relay.unregister_client("session-a", first.client_id)
@@ -382,7 +382,7 @@ def test_9_cross_session_replay_never_falls_over_to_other_session() -> None:
     a = await register_client(relay, "session-a", "A.xlsx")
     b = await register_client(relay, "session-b", "B.xlsx")
 
-    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=0.2))
+    execute_task = asyncio.create_task(relay.execute("read_cells", {"range": "A1"}, timeout=0.2, user_id="alice"))
     await get_event(a.queue)
     await relay.unregister_client("session-a", a.client_id)
 
@@ -488,5 +488,237 @@ def test_15_delivery_id_cannot_be_omitted() -> None:
 
     await finish_request(relay, event)
     assert (await task)["error"] is None
+
+  run_async(scenario())
+
+
+def test_list_workbooks_cross_session_same_user_returns_all() -> None:
+  async def scenario() -> None:
+    relay = make_relay()
+    first = await register_client(relay, "session-a", "A.xlsx", user_id="alice")
+    second = await register_client(relay, "session-b", "B.xlsx", user_id="alice")
+
+    workbooks = await relay.list_workbooks(gateway_session_id=first.gateway_session_id, user_id="alice")
+
+    assert [item["session"] for item in workbooks] == [
+      first.workbook_session,
+      second.workbook_session,
+    ]
+
+  run_async(scenario())
+
+
+def test_list_workbooks_cross_user_isolation_preserved() -> None:
+  async def scenario() -> None:
+    relay = make_relay()
+    alice = await register_client(relay, "session-a", "A.xlsx", user_id="alice")
+    await register_client(relay, "session-b", "B.xlsx", user_id="bob")
+
+    workbooks = await relay.list_workbooks(gateway_session_id="session-b", user_id="alice")
+
+    assert [item["session"] for item in workbooks] == [alice.workbook_session]
+
+  run_async(scenario())
+
+
+def test_resolve_cross_session_fallback_picks_user_active_workbook() -> None:
+  async def scenario() -> None:
+    relay = make_relay()
+    active = await register_client(relay, "session-a", "A.xlsx", user_id="alice")
+    other = await register_client(relay, "session-b", "B.xlsx", user_id="bob")
+
+    execute_task = asyncio.create_task(
+      relay.execute(
+        "read_cells",
+        {"range": "A1"},
+        timeout=1,
+        gateway_session_id="mcp-session",
+        user_id="alice",
+      )
+    )
+    event = await get_event(active.queue)
+    assert event["delivery_id"] == active.client_id
+    await assert_queue_empty(other.queue)
+
+    await finish_request(relay, event)
+    assert (await execute_task)["error"] is None
+
+  run_async(scenario())
+
+
+def test_resolve_cross_user_rejects_explicit_target() -> None:
+  async def scenario() -> None:
+    relay = make_relay()
+    alice = await register_client(relay, "session-a", "A.xlsx", user_id="alice")
+    bob = await register_client(relay, "session-b", "B.xlsx", user_id="bob")
+
+    with pytest.raises(RuntimeError, match="unknown_session"):
+      await relay.execute(
+        "read_cells",
+        {"range": "A1"},
+        timeout=1,
+        target_session=bob.gateway_session_id,
+        gateway_session_id=alice.gateway_session_id,
+        user_id="alice",
+      )
+
+    await assert_queue_empty(alice.queue)
+    await assert_queue_empty(bob.queue)
+
+  run_async(scenario())
+
+
+def test_resolve_multi_workbook_same_user_respects_explicit_switch() -> None:
+  async def scenario() -> None:
+    relay = make_relay()
+    first = await register_client(relay, "session-a", "A.xlsx", user_id="alice")
+    second = await register_client(relay, "session-b", "B.xlsx", user_id="alice")
+    assert relay._user_active_workbook["alice"] == first.gateway_session_id
+
+    first_task = asyncio.create_task(
+      relay.execute(
+        "read_cells",
+        {"range": "A1"},
+        timeout=1,
+        gateway_session_id="mcp-session",
+        user_id="alice",
+      )
+    )
+    first_event = await get_event(first.queue)
+    await assert_queue_empty(second.queue)
+    await finish_request(relay, first_event)
+    assert (await first_task)["error"] is None
+
+    await relay.switch_active_workbook(
+      second.workbook_session,
+      gateway_session_id="mcp-session",
+      user_id="alice",
+    )
+    assert relay._user_active_workbook["alice"] == second.gateway_session_id
+    active_event = await get_event(second.queue)
+    assert active_event == {"type": "active_changed", "new_active": second.workbook_session}
+
+    second_task = asyncio.create_task(
+      relay.execute(
+        "read_cells",
+        {"range": "B2"},
+        timeout=1,
+        gateway_session_id="mcp-session",
+        user_id="alice",
+      )
+    )
+    second_event = await get_event(second.queue)
+    assert second_event["tool_input"] == {"range": "B2"}
+    await assert_queue_empty(first.queue)
+    await finish_request(relay, second_event)
+    assert (await second_task)["error"] is None
+
+  run_async(scenario())
+
+
+def test_user_active_workbook_cleanup_on_unregister() -> None:
+  async def scenario() -> None:
+    relay = make_relay()
+    first = await register_client(relay, "session-a", "A.xlsx", user_id="alice")
+    second = await register_client(relay, "session-b", "B.xlsx", user_id="alice")
+
+    await relay.switch_active_workbook(first.workbook_session, user_id="alice")
+    assert relay._user_active_workbook["alice"] == first.gateway_session_id
+    await get_event(first.queue)
+
+    await relay.unregister_client(first.gateway_session_id, first.client_id, immediate=True)
+    assert relay._user_active_workbook["alice"] == second.gateway_session_id
+
+    await relay.unregister_client(second.gateway_session_id, second.client_id, immediate=True)
+    assert "alice" not in relay._user_active_workbook
+
+  run_async(scenario())
+
+
+def test_inactive_same_user_reconnect_does_not_steal_active() -> None:
+  async def scenario() -> None:
+    relay = make_relay()
+    first = await register_client(relay, "session-a", "A.xlsx", user_id="alice")
+    second = await register_client(relay, "session-b", "B.xlsx", user_id="alice")
+    await relay.switch_active_workbook(first.workbook_session, user_id="alice")
+    await get_event(first.queue)
+
+    replacement = await register_client(relay, "session-b", "B.xlsx", user_id="alice")
+
+    assert replacement.client_id != second.client_id
+    assert relay._user_active_workbook["alice"] == first.gateway_session_id
+    assert await get_event(second.queue) == {"type": "replaced", "reason": "Same-session reconnect"}
+
+  run_async(scenario())
+
+
+def test_new_connection_replaces_detached_user_active_workbook() -> None:
+  async def scenario() -> None:
+    relay = make_relay(grace=0.2)
+    stale = await register_client(relay, "session-a", "A.xlsx", user_id="alice")
+
+    await relay.unregister_client(stale.gateway_session_id, stale.client_id, immediate=False)
+    assert relay._clients[stale.gateway_session_id].detached is True
+    assert relay._user_active_workbook["alice"] == stale.gateway_session_id
+
+    fresh = await register_client(relay, "session-b", "A.xlsx", user_id="alice")
+    assert relay._user_active_workbook["alice"] == fresh.gateway_session_id
+
+    workbooks = await relay.list_workbooks(user_id="alice")
+    active_by_gateway_session = {item["gateway_session_id"]: item["active"] for item in workbooks}
+    assert active_by_gateway_session[stale.gateway_session_id] is False
+    assert active_by_gateway_session[fresh.gateway_session_id] is True
+
+    execute_task = asyncio.create_task(
+      relay.execute(
+        "read_cells",
+        {"range": "A1"},
+        timeout=1,
+        gateway_session_id="mcp-session",
+        user_id="alice",
+      )
+    )
+    event = await get_event(fresh.queue)
+    assert event["delivery_id"] == fresh.client_id
+    await assert_queue_empty(stale.queue)
+
+    await finish_request(relay, event)
+    assert (await execute_task)["error"] is None
+
+  run_async(scenario())
+
+
+def test_execute_no_user_workbook_raises_no_active_session() -> None:
+  async def scenario() -> None:
+    relay = make_relay()
+    await register_client(relay, "session-y", "Y.xlsx", user_id="bob")
+
+    with pytest.raises(RuntimeError, match="no_active_session"):
+      await relay.execute(
+        "read_cells",
+        {"range": "A1"},
+        timeout=1,
+        gateway_session_id="session-y",
+        user_id="alice",
+      )
+
+  run_async(scenario())
+
+
+def test_soft_detach_preserves_user_active_workbook() -> None:
+  async def scenario() -> None:
+    relay = make_relay(grace=0.02)
+    client = await register_client(relay, "session-a", "A.xlsx", user_id="alice")
+    assert relay._user_active_workbook["alice"] == client.gateway_session_id
+
+    await relay.unregister_client(client.gateway_session_id, client.client_id, immediate=False)
+    assert relay._clients[client.gateway_session_id].detached is True
+    assert relay._user_active_workbook["alice"] == client.gateway_session_id
+
+    await asyncio.sleep(relay.reconnect_grace_seconds + 0.03)
+    await relay.list_workbooks(user_id="alice")
+
+    assert "alice" not in relay._user_active_workbook
+    assert client.gateway_session_id not in relay._clients
 
   run_async(scenario())

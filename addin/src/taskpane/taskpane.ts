@@ -3,6 +3,7 @@
 import { OfficeService } from "./services/OfficeService";
 
 const API_BASE = process.env.API_BASE || "https://localhost:8000";
+const SESSION_API_KEY = process.env.SESSION_API_KEY || "";
 const MCP_RECONNECT_DELAY_MS = 3000;
 
 interface ToolErrorPayload {
@@ -26,6 +27,16 @@ interface McpToolRequestEvent {
   replay?: boolean;
 }
 
+interface McpChatRequestEvent {
+  type: "mcp_chat_request";
+  request_id: string;
+  nonce: string;
+  delivery_id: string;
+  text?: string;
+  force_compaction?: boolean;
+  replay?: boolean;
+}
+
 const elements: {
   sideloadMsg?: HTMLElement | null;
   app?: HTMLElement | null;
@@ -34,6 +45,7 @@ const elements: {
 } = {};
 
 let mcpStopped = false;
+let sessionJwt = "";
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Excel) {
@@ -61,16 +73,45 @@ function setStatus(text: string, state: "connected" | "disconnected" | "working"
   }
 }
 
-function getMcpSecret(): string {
-  const envSecret = process.env.EXCEL_MCP_SECRET || "";
-  const sessionSecret = sessionStorage.getItem("excel_mcp_secret") || "";
-  return (envSecret || sessionSecret).trim();
+function getSessionApiKey(): string {
+  const storedKey = sessionStorage.getItem("gateway_session_api_key") || "";
+  return (SESSION_API_KEY || storedKey).trim();
 }
 
-function getUserId(): string {
-  const envUserId = process.env.EXCEL_MCP_USER_ID || "";
-  const sessionUserId = sessionStorage.getItem("excel_mcp_user_id") || "";
-  return (envUserId || sessionUserId).trim();
+async function refreshSessionJwt(): Promise<string> {
+  const apiKey = getSessionApiKey();
+  if (!apiKey) {
+    throw new Error("SESSION_API_KEY is required");
+  }
+  const response = await fetch(`${API_BASE}/api/chat/init`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey, context: { channel: "excel" } }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(text || `Session init failed (${response.status})`);
+  }
+  const body = await response.json();
+  const token = typeof body.session_token === "string" ? body.session_token.trim() : "";
+  if (!token) {
+    throw new Error("Session init response did not include session_token");
+  }
+  sessionJwt = token;
+  sessionStorage.setItem("session_token", token);
+  return token;
+}
+
+async function getSessionJwt(): Promise<string> {
+  if (sessionJwt) {
+    return sessionJwt;
+  }
+  const storedToken = sessionStorage.getItem("session_token") || "";
+  if (storedToken.trim()) {
+    sessionJwt = storedToken.trim();
+    return sessionJwt;
+  }
+  return refreshSessionJwt();
 }
 
 function getSessionToken(): string {
@@ -93,23 +134,18 @@ async function getWorkbookName(): Promise<string> {
 
 async function connectLoop(): Promise<void> {
   while (!mcpStopped) {
-    const secret = getMcpSecret();
-    if (!secret) {
-      setStatus("Waiting for EXCEL_MCP_SECRET", "disconnected");
-      await sleep(MCP_RECONNECT_DELAY_MS);
-      continue;
-    }
-    const userId = getUserId();
-    if (!userId) {
-      setStatus("Waiting for EXCEL_MCP_USER_ID", "disconnected");
+    if (!getSessionApiKey()) {
+      setStatus("Waiting for SESSION_API_KEY", "disconnected");
       await sleep(MCP_RECONNECT_DELAY_MS);
       continue;
     }
 
     try {
-      await connectOnce(secret, userId);
+      await connectOnce(await getSessionJwt());
     } catch (error) {
       console.error("[MCP] stream error", error);
+      sessionJwt = "";
+      sessionStorage.removeItem("session_token");
       setStatus("Disconnected", "disconnected");
     }
 
@@ -117,18 +153,19 @@ async function connectLoop(): Promise<void> {
   }
 }
 
-async function connectOnce(secret: string, userId: string): Promise<void> {
+async function connectOnce(jwt: string): Promise<void> {
   setStatus("Connecting...", "working");
   const workbookName = await getWorkbookName();
   const sessionToken = getSessionToken();
   const url =
-    `${API_BASE}/api/mcp/events?secret=${encodeURIComponent(secret)}` +
-    `&workbook=${encodeURIComponent(workbookName)}` +
-    `&session=${encodeURIComponent(sessionToken)}` +
-    `&user_id=${encodeURIComponent(userId)}`;
+    `${API_BASE}/api/mcp/events?session=${encodeURIComponent(sessionToken)}` +
+    `&workbook=${encodeURIComponent(workbookName)}`;
   const response = await fetch(url, {
     method: "GET",
-    headers: { Accept: "text/event-stream" },
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: "text/event-stream",
+    },
   });
 
   if (!response.ok || !response.body) {
@@ -165,7 +202,10 @@ async function connectOnce(secret: string, userId: string): Promise<void> {
 
       if (event.type === "mcp_tool_request") {
         setStatus(`Running ${event.tool_name}`, "working");
-        void handleToolRequest(event as McpToolRequestEvent);
+        void handleToolRequest(event as McpToolRequestEvent, jwt);
+      } else if (event.type === "mcp_chat_request") {
+        setStatus("Chat relay unsupported", "disconnected");
+        void handleUnsupportedChatRequest(event as McpChatRequestEvent, jwt);
       } else if (event.type === "heartbeat") {
         setStatus("Connected", "connected");
       } else if (event.type === "replaced") {
@@ -176,9 +216,7 @@ async function connectOnce(secret: string, userId: string): Promise<void> {
   }
 }
 
-async function handleToolRequest(event: McpToolRequestEvent): Promise<void> {
-  const secret = getMcpSecret();
-  if (!secret) return;
+async function handleToolRequest(event: McpToolRequestEvent, jwt: string): Promise<void> {
   const deliveryId = event.delivery_id;
 
   await postToolResult(
@@ -188,7 +226,7 @@ async function handleToolRequest(event: McpToolRequestEvent): Promise<void> {
       delivery_id: deliveryId,
       ack: true,
     },
-    secret
+    jwt
   );
 
   const outcome = await executeOfficeServiceTool(event.tool_name, event.tool_input);
@@ -201,18 +239,48 @@ async function handleToolRequest(event: McpToolRequestEvent): Promise<void> {
       result: outcome.result,
       error: outcome.error,
     },
-    secret
+    jwt
   );
 
   setStatus("Connected", "connected");
 }
 
-async function postToolResult(payload: Record<string, any>, secret: string): Promise<void> {
+async function handleUnsupportedChatRequest(event: McpChatRequestEvent, jwt: string): Promise<void> {
+  const deliveryId = event.delivery_id;
+
+  await postToolResult(
+    {
+      request_id: event.request_id,
+      nonce: event.nonce,
+      delivery_id: deliveryId,
+      ack: true,
+    },
+    jwt
+  );
+
+  await postToolResult(
+    {
+      request_id: event.request_id,
+      nonce: event.nonce,
+      delivery_id: deliveryId,
+      result: null,
+      error: {
+        code: "unsupported_capability",
+        message: "This workbook-only taskpane bridge does not support mcp_chat_request",
+      },
+    },
+    jwt
+  );
+
+  setStatus("Connected", "connected");
+}
+
+async function postToolResult(payload: Record<string, any>, jwt: string): Promise<void> {
   const response = await fetch(`${API_BASE}/api/mcp/tool-result`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-MCP-Secret": secret,
+      Authorization: `Bearer ${jwt}`,
     },
     body: JSON.stringify(payload),
   });
@@ -233,6 +301,9 @@ async function executeOfficeServiceTool(toolName: string, toolInput: Record<stri
       case "write_cells":
         result = await OfficeService.writeCells(toolInput.range, toolInput.values, toolInput.number_format);
         break;
+      case "restore_written_cells":
+        result = await OfficeService.restoreWrittenCells(toolInput.restore_token);
+        break;
       case "get_selection":
         result = await OfficeService.getSelection();
         break;
@@ -251,11 +322,17 @@ async function executeOfficeServiceTool(toolName: string, toolInput: Record<stri
       case "rename_sheet":
         result = await OfficeService.renameSheet(toolInput.new_name, toolInput.sheet_name);
         break;
+      case "restore_renamed_sheet":
+        result = await OfficeService.restoreRenamedSheet(toolInput.restore_token);
+        break;
       case "delete_sheet":
         result = await OfficeService.deleteSheet(toolInput.sheet_name, toolInput.force);
         break;
       case "delete_row":
         result = await OfficeService.deleteRow(toolInput.row, toolInput.count, toolInput.sheet_name, toolInput.force);
+        break;
+      case "restore_deleted_row":
+        result = await OfficeService.restoreDeletedRow(toolInput.restore_token);
         break;
       case "insert_row":
         result = await OfficeService.insertRow(toolInput.row, toolInput.count, toolInput.sheet_name);

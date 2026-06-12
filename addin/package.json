@@ -9,7 +9,7 @@
   "config": {
     "app_to_debug": "excel",
     "app_type_to_debug": "desktop",
-    "dev_server_port": 3002
+    "dev_server_port": 3102
   },
   "scripts": {
     "build": "webpack --mode production",

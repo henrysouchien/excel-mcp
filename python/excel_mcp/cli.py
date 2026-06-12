@@ -19,16 +19,18 @@ from typing import IO, Sequence
 from dotenv import dotenv_values
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = PACKAGE_ROOT.parents[1]
 ADDIN_ROOT = PACKAGE_ROOT / "addin"
 ENV_PATH = PACKAGE_ROOT / ".env"
 CERT_DIR = Path.home() / ".office-addin-dev-certs"
 CERT_PATH = CERT_DIR / "localhost.crt"
 KEY_PATH = CERT_DIR / "localhost.key"
 RELAY_PORT = 8000
-ADDIN_PORT = 3002
+ADDIN_PORT = 3102
 READINESS_TIMEOUT_SECONDS = 15
 READINESS_POLL_SECONDS = 0.5
 CERT_RENEW_COMMAND = "cd addin && npx office-addin-dev-certs install --days 365"
+MCP_KEY_ROLES = ("owner", "invite")
 
 
 class CliError(RuntimeError):
@@ -40,16 +42,42 @@ def build_parser() -> argparse.ArgumentParser:
   subparsers = parser.add_subparsers(dest="subcommand")
 
   setup_parser = subparsers.add_parser("setup", help="Install local prerequisites for the Excel MCP package")
-  setup_parser.add_argument("--force", action="store_true", help="Regenerate .env secret and rerun setup steps")
+  setup_parser.add_argument("--force", action="store_true", help="Rewrite package .env keys and rerun setup steps")
   setup_parser.set_defaults(func=command_setup)
 
-  start_parser = subparsers.add_parser("start", help="Start the relay and add-in dev server")
+  start_parser = subparsers.add_parser("start", help="Start the gateway and add-in dev server")
   start_parser.set_defaults(func=command_start)
 
   mcp_parser = subparsers.add_parser("mcp", help="Run the MCP stdio server")
   mcp_parser.set_defaults(func=command_mcp)
 
+  key_parser = subparsers.add_parser(
+    "generate-mcp-key",
+    help="Generate a per-user MCP API key and GATEWAY_USER_KEYS entry",
+  )
+  key_parser.add_argument("--user", required=True, type=_non_empty_arg("user"), help="User slug for the key")
+  key_parser.add_argument("--email", required=True, type=_non_empty_arg("email"), help="User email for the key entry")
+  key_parser.add_argument("--risk-user-id", required=True, type=int, help="Numeric risk_user_id for the key entry")
+  key_parser.add_argument("--role", default="owner", choices=MCP_KEY_ROLES, help="User role for the key entry")
+  key_parser.add_argument(
+    "--label",
+    default="mcp",
+    type=_non_empty_arg("label"),
+    help="Optional key label under the <slug>_mcp namespace",
+  )
+  key_parser.set_defaults(func=command_generate_mcp_key)
+
   return parser
+
+
+def _non_empty_arg(name: str):
+  def _validate(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+      raise argparse.ArgumentTypeError(f"{name} must be non-empty")
+    return normalized
+
+  return _validate
 
 
 def main(argv: Sequence[str] | None = None, *, default_subcommand: str | None = None) -> int:
@@ -97,7 +125,7 @@ def command_setup(args: argparse.Namespace) -> int:
   _check_prerequisites()
 
   _print_step(2, steps)
-  secret = _ensure_package_secret(force=bool(args.force))
+  api_key = _ensure_package_api_keys(force=bool(args.force))
 
   _print_step(3, steps)
   _run_checked(
@@ -131,7 +159,7 @@ def command_setup(args: argparse.Namespace) -> int:
   )
 
   _print_step(8, steps)
-  _print_mcp_config(secret)
+  _print_mcp_config(api_key)
 
   _print_step(9, steps)
   print("Setup complete. Run `python3 -m excel_mcp start`, then open Excel.")
@@ -165,13 +193,13 @@ def command_start(_: argparse.Namespace) -> int:
 
   try:
     relay_proc = _start_process(
-      "relay",
+      "gateway",
       [
         sys.executable,
         "-u",
         "-m",
         "uvicorn",
-        "excel_mcp.relay:app",
+        "api.main:app",
         "--host",
         "0.0.0.0",
         "--port",
@@ -181,7 +209,7 @@ def command_start(_: argparse.Namespace) -> int:
         "--ssl-certfile",
         str(CERT_PATH),
       ],
-      cwd=PACKAGE_ROOT,
+      cwd=REPO_ROOT,
       env=child_env,
     )
     addin_proc = _start_process(
@@ -192,14 +220,14 @@ def command_start(_: argparse.Namespace) -> int:
     )
 
     _wait_for_readiness(
-      processes={"relay": relay_proc, "addin": addin_proc},
-      ports={"relay": RELAY_PORT, "addin": ADDIN_PORT},
+      processes={"gateway": relay_proc, "addin": addin_proc},
+      ports={"gateway": RELAY_PORT, "addin": ADDIN_PORT},
       stop_event=stop_event,
     )
     if stop_event.is_set():
       _stop_processes([relay_proc, addin_proc], received_signal["value"] or signal.SIGTERM)
       return 0
-    print("Relay on https://localhost:8000, Add-in on https://localhost:3002. Open Excel.")
+    print("Gateway on https://localhost:8000, Add-in on https://localhost:3102. Open Excel.")
 
     while True:
       if stop_event.wait(READINESS_POLL_SECONDS):
@@ -209,7 +237,7 @@ def command_start(_: argparse.Namespace) -> int:
       relay_code = relay_proc.poll()
       addin_code = addin_proc.poll()
       if relay_code is not None:
-        raise CliError(f"Relay exited unexpectedly with code {relay_code}.")
+        raise CliError(f"Gateway exited unexpectedly with code {relay_code}.")
       if addin_code is not None:
         raise CliError(f"Add-in dev server exited unexpectedly with code {addin_code}.")
   finally:
@@ -223,6 +251,31 @@ def command_mcp(_: argparse.Namespace) -> int:
 
   _prepare_stdio_instance()
   mcp.run()
+  return 0
+
+
+def command_generate_mcp_key(args: argparse.Namespace) -> int:
+  token = secrets.token_urlsafe(32)
+  label = str(args.label).strip()
+  if label == "mcp":
+    key = f"sk_{args.user}_mcp_{token}"
+  else:
+    key = f"sk_{args.user}_mcp_{label}_{token}"
+
+  entry = {
+    "key": key,
+    "channel": "mcp",
+    "slug": args.user,
+    "email": args.email,
+    "risk_user_id": args.risk_user_id,
+    "role": args.role,
+  }
+  print(key)
+  print(json.dumps(entry, separators=(",", ":")))
+  print(
+    "Append this entry to GATEWAY_USER_KEYS in .env. Restart the gateway to pick it up. "
+    "Then set the key in your subprocess env (e.g., EXCEL_MCP_API_KEY in ~/.claude.json)."
+  )
   return 0
 
 
@@ -265,21 +318,29 @@ def _command_version(command: Sequence[str], *, name: str) -> tuple[int, int, in
   return major, minor, patch
 
 
-def _ensure_package_secret(*, force: bool) -> str:
+def _ensure_package_api_keys(*, force: bool) -> str:
   env_exists = ENV_PATH.exists()
   current_values = dotenv_values(ENV_PATH) if ENV_PATH.exists() else {}
-  current_secret = str(current_values.get("EXCEL_MCP_SECRET") or "").strip()
+  current_mcp_key = str(current_values.get("EXCEL_MCP_API_KEY") or "").strip()
+  current_session_key = str(current_values.get("SESSION_API_KEY") or "").strip()
+  shell_mcp_key = os.getenv("EXCEL_MCP_API_KEY", "").strip()
+  shell_session_key = os.getenv("SESSION_API_KEY", "").strip()
   if ENV_PATH.exists() and not force:
-    if not current_secret:
-      raise CliError(f"{ENV_PATH} exists but EXCEL_MCP_SECRET is missing. Re-run setup with --force.")
-    print(f"Using existing EXCEL_MCP_SECRET from {ENV_PATH}.")
-    return current_secret
+    missing = [name for name, value in (("EXCEL_MCP_API_KEY", current_mcp_key), ("SESSION_API_KEY", current_session_key)) if not value]
+    if missing:
+      raise CliError(f"{ENV_PATH} exists but {', '.join(missing)} is missing. Re-run setup with --force after exporting them.")
+    print(f"Using existing EXCEL_MCP_API_KEY and SESSION_API_KEY from {ENV_PATH}.")
+    return current_mcp_key
 
-  secret = secrets.token_urlsafe(32)
-  _write_env_key(ENV_PATH, "EXCEL_MCP_SECRET", secret)
-  action = "Regenerated" if env_exists and force else "Generated"
-  print(f"{action} EXCEL_MCP_SECRET in {ENV_PATH}.")
-  return secret
+  if not shell_mcp_key:
+    raise CliError("EXCEL_MCP_API_KEY must be exported before setup; use a channel='mcp' GATEWAY_USER_KEYS key.")
+  if not shell_session_key:
+    raise CliError("SESSION_API_KEY must be exported before setup; use a channel='excel' GATEWAY_USER_KEYS key.")
+  _write_env_key(ENV_PATH, "EXCEL_MCP_API_KEY", shell_mcp_key)
+  _write_env_key(ENV_PATH, "SESSION_API_KEY", shell_session_key)
+  action = "Updated" if env_exists and force else "Wrote"
+  print(f"{action} EXCEL_MCP_API_KEY and SESSION_API_KEY in {ENV_PATH}.")
+  return shell_mcp_key
 
 
 def _write_env_key(path: Path, key: str, value: str) -> None:
@@ -308,7 +369,7 @@ def _run_checked(command: Sequence[str], *, cwd: Path, step: str) -> None:
     raise CliError(f"{step} failed with exit code {result.returncode}.")
 
 
-def _print_mcp_config(secret: str) -> None:
+def _print_mcp_config(api_key: str) -> None:
   config = {
     "mcpServers": {
       "excel-addin": {
@@ -316,7 +377,7 @@ def _print_mcp_config(secret: str) -> None:
         "command": str(Path(sys.executable).resolve()),
         "args": ["-m", "excel_mcp", "mcp"],
         "env": {
-          "EXCEL_MCP_SECRET": secret,
+          "EXCEL_MCP_API_KEY": api_key,
           "EXCEL_MCP_BACKEND_URL": "https://localhost:8000/api/mcp/execute",
         },
       }
@@ -335,10 +396,14 @@ def _load_package_env() -> dict[str, str]:
     for key, value in dotenv_values(ENV_PATH).items()
     if isinstance(key, str) and isinstance(value, str)
   }
-  secret = values.get("EXCEL_MCP_SECRET", "").strip()
-  if not secret:
-    raise CliError(f"{ENV_PATH} is missing EXCEL_MCP_SECRET. Run `python3 -m excel_mcp setup --force`.")
-  values["EXCEL_MCP_SECRET"] = secret
+  api_key = values.get("EXCEL_MCP_API_KEY", "").strip()
+  if not api_key:
+    raise CliError(f"{ENV_PATH} is missing EXCEL_MCP_API_KEY. Export it, then run `python3 -m excel_mcp setup --force`.")
+  values["EXCEL_MCP_API_KEY"] = api_key
+  session_api_key = values.get("SESSION_API_KEY", "").strip()
+  if not session_api_key:
+    raise CliError(f"{ENV_PATH} is missing SESSION_API_KEY. Export it, then run `python3 -m excel_mcp setup --force`.")
+  values["SESSION_API_KEY"] = session_api_key
   return values
 
 
