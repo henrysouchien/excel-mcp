@@ -73,7 +73,7 @@ The package `create_relay_app()` factory is intended to be embedded with an
 application-provided request authenticator. The product gateway wires that to
 gateway JWT sessions issued from `GATEWAY_USER_KEYS`.
 
-In the `AI-excel-addin` product repo, prefer services-mcp instead of raw
+In the `ai-excel-addin` product repo, prefer services-mcp instead of raw
 uvicorn for local product work:
 
 ```text
@@ -103,10 +103,11 @@ generic MCP bridge. It runs on `https://localhost:3102` with a separate
 `Excel MCP Bridge (Internal)` manifest so it does not replace the product
 taskpane.
 
-In the `AI-excel-addin` product repo, use the root Hank AI add-in instead:
+In the `ai-excel-addin` product repo, use the root Hank AI add-in instead.
+Set `JUPYTER_ROOT` to the directory containing the sibling checkouts:
 
 ```bash
-cd /Users/henrychien/Documents/Jupyter/AI-excel-addin
+cd "$JUPYTER_ROOT/ai-excel-addin"
 npm run dev-server
 npm start
 ```
