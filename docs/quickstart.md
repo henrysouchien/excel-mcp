@@ -54,7 +54,7 @@ For the `AI-excel-addin` product repo, use the root Hank AI taskpane. It is the
 user-facing add-in and embeds the Excel MCP bridge behind the chat/artifact UI:
 
 ```bash
-cd /Users/henrychien/Documents/Jupyter/AI-excel-addin
+cd /Users/henrychien/Jupyter/AI-excel-addin
 npm run dev-server
 npm start
 ```
